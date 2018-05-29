@@ -1,4 +1,9 @@
 <resources>
     <string name="app_name">CamMuse</string>
     <string name="footer_background">Footer</string>
+    <string name="header_background">Header</string>
+    <string name="switch_camera">Switch Camera</string>
+    <string name="btn_center">Button Center</string>
+    <string name="btn_right">Button Right</string>
+    <string name="btn_left">Button Left</string>
 </resources>

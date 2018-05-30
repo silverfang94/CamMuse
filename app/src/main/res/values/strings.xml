@@ -6,4 +6,7 @@
     <string name="btn_center">Button Center</string>
     <string name="btn_right">Button Right</string>
     <string name="btn_left">Button Left</string>
+    <string name="chronometer">Chronometer</string>
+    <string name="mic_background">Mic Background</string>
+    <string name="btn_folder">Folder</string>
 </resources>

@@ -40,8 +40,11 @@ import android.widget.ImageView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.lang.reflect.Array;
+import java.net.URI;
+import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -59,6 +62,7 @@ public class CamMuseActivity extends AppCompatActivity {
     private static final int REQUEST_WRITE_EXTERNAL_STORAGE_PERMISSION_RESULT = 1;
     private static final int STATE_PREVIEW = 0;
     private static final int STATE_WAIT_LOCK = 1;
+    public static final int IMAGE_GALLERY_REQUEST = 20;
     private int mCaptureState = STATE_PREVIEW;
     private int mActualCenter = 0;
     private int mActualRight = 1;
@@ -68,6 +72,8 @@ public class CamMuseActivity extends AppCompatActivity {
     private ImageView mRightButton;
     private ImageView mLeftButton;
     private ImageView mSwitchCameraButton;
+    private ImageView mMicBackground;
+    private ImageView mFolder;
     private CameraDevice mCameraDevice;
     private String mCameraId = CAMERA_FRONT;
     private HandlerThread mBackgroundHandlerThread;
@@ -84,26 +90,67 @@ public class CamMuseActivity extends AppCompatActivity {
     private String mVideoFileName;
     private File mImageFolder;
     private String mImageFileName;
+    private File mAudioFolder;
+    private String mAudioFileName;
+    private MediaRecorder mAudioRecorder;
     private boolean mRecording = false;
-    private boolean mTimelapse = false;
+    private boolean mAudioRecording = false;
     private CameraCaptureSession mRecordCaptureSession;
     private CameraCaptureSession mPreviewCaptureSession;
 
     private static SparseIntArray ORIENTATIONS = new SparseIntArray();
     static {
-        ORIENTATIONS.append(Surface.ROTATION_0,0);
-        ORIENTATIONS.append(Surface.ROTATION_90,90);
-        ORIENTATIONS.append(Surface.ROTATION_180,180);
-        ORIENTATIONS.append(Surface.ROTATION_270,270);
+        ORIENTATIONS.append(Surface.ROTATION_0,270);
+        ORIENTATIONS.append(Surface.ROTATION_90, 0);
+        ORIENTATIONS.append(Surface.ROTATION_180, 90);
+        ORIENTATIONS.append(Surface.ROTATION_270, 180);
     }
 
     private final ImageReader.OnImageAvailableListener mOnImageAvailableListener = new
             ImageReader.OnImageAvailableListener() {
                 @Override
                 public void onImageAvailable(ImageReader reader) {
-
+                    mBackgroundHandler.post(new ImageSaver(reader.acquireLatestImage()));
                 }
             };
+    private class ImageSaver implements Runnable {
+
+        private final Image mImage;
+
+        public ImageSaver(Image image) {
+            mImage = image;
+        }
+
+        @Override
+        public void run() {
+            ByteBuffer byteBuffer = mImage.getPlanes()[0].getBuffer();
+            byte[] bytes = new byte[byteBuffer.remaining()];
+            byteBuffer.get(bytes);
+
+            FileOutputStream fileOutputStream = null;
+            try {
+                fileOutputStream = new FileOutputStream(mImageFileName);
+                fileOutputStream.write(bytes);
+            } catch (IOException e) {
+                e.printStackTrace();
+            } finally {
+                mImage.close();
+
+                Intent mediaStoreUpdateIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+                mediaStoreUpdateIntent.setData(Uri.fromFile(new File(mImageFileName)));
+                sendBroadcast(mediaStoreUpdateIntent);
+
+                if(fileOutputStream != null) {
+                    try {
+                        fileOutputStream.close();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+
+        }
+    }
 
     private CameraCaptureSession.CaptureCallback mPreviewCaptureCallback = new
             CameraCaptureSession.CaptureCallback() {
@@ -111,43 +158,14 @@ public class CamMuseActivity extends AppCompatActivity {
                 private void process(CaptureResult captureResult) {
                     switch (mCaptureState) {
                         case STATE_PREVIEW:
-                            // Do nothing
                             break;
                         case STATE_WAIT_LOCK:
                             mCaptureState = STATE_PREVIEW;
                             Integer afState = captureResult.get(CaptureResult.CONTROL_AF_STATE);
-                            if(afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
-                                    afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) {
-                                Toast.makeText(getApplicationContext(), "AF Locked!", Toast.LENGTH_SHORT).show();
+                            //if(afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
+                              //      afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) {
                                 startStillCaptureRequest();
-                            }
-                            break;
-                    }
-                }
-
-                @Override
-                public void onCaptureCompleted(CameraCaptureSession session, CaptureRequest request, TotalCaptureResult result) {
-                    super.onCaptureCompleted(session, request, result);
-
-                    process(result);
-                }
-            };
-    private CameraCaptureSession.CaptureCallback mRecordCaptureCallback = new
-            CameraCaptureSession.CaptureCallback() {
-
-                private void process(CaptureResult captureResult) {
-                    switch (mCaptureState) {
-                        case STATE_PREVIEW:
-                            // Do nothing
-                            break;
-                        case STATE_WAIT_LOCK:
-                            mCaptureState = STATE_PREVIEW;
-                            Integer afState = captureResult.get(CaptureResult.CONTROL_AF_STATE);
-                            if(afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
-                                    afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) {
-                                Toast.makeText(getApplicationContext(), "AF Locked!", Toast.LENGTH_SHORT).show();
-                                startStillCaptureRequest();
-                            }
+                            //}
                             break;
                     }
                 }
@@ -192,8 +210,6 @@ public class CamMuseActivity extends AppCompatActivity {
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
-
-                Toast.makeText(getApplicationContext(),"omOpened",Toast.LENGTH_SHORT).show();
                 startRecord();
                 mMediaRecorder.start();
                 mChronometer.setBase(SystemClock.elapsedRealtime());
@@ -226,6 +242,7 @@ public class CamMuseActivity extends AppCompatActivity {
         setContentView(R.layout.activity_cam_muse);
         createVideoFolder();
         createImageFolder();
+        createAudioFolder();
 
         mTextureView = (TextureView) findViewById(R.id.textureView);
         mCenterButton = (ImageView) findViewById(R.id.btn_center);
@@ -233,39 +250,83 @@ public class CamMuseActivity extends AppCompatActivity {
         mLeftButton = (ImageView) findViewById(R.id.btn_left);
         mSwitchCameraButton = (ImageView) findViewById(R.id.swith_camera);
         mChronometer = (Chronometer) findViewById(R.id.chronometer);
+        mMicBackground = (ImageView) findViewById(R.id.mic_background);
+        mFolder = (ImageView) findViewById(R.id.btn_folder);
 
         mRightButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                int mAux = mActualCenter;
-                mActualCenter = mActualRight;
-                mActualRight = mAux;
+                if(!mRecording || !mAudioRecording) {
+                    int mAux = mActualCenter;
+                    mActualCenter = mActualRight;
+                    mActualRight = mAux;
 
-                setButtonImage(mCenterButton,mActualCenter,true);
-                setButtonImage(mRightButton,mActualRight,false);
+                    setButtonImage(mCenterButton, mActualCenter, true);
+                    setButtonImage(mRightButton, mActualRight, false);
+                }
             }
         });
         mLeftButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                int mAux = mActualCenter;
-                mActualCenter = mActualLeft;
-                mActualLeft = mAux;
+                if(!mRecording || !mAudioRecording) {
+                    int mAux = mActualCenter;
+                    mActualCenter = mActualLeft;
+                    mActualLeft = mAux;
 
-                setButtonImage(mCenterButton,mActualCenter,true);
-                setButtonImage(mLeftButton,mActualLeft,false);
+                    setButtonImage(mCenterButton, mActualCenter, true);
+                    setButtonImage(mLeftButton, mActualLeft, false);
+                }
             }
         });
         mSwitchCameraButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                switchCamera();
+                if(!mRecording || !mAudioRecording) {
+                    switchCamera();
+                }
             }
         });
         mCenterButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 centerButtonImageOnClickMethod();
+            }
+        });
+        mFolder.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if(!mRecording || !mAudioRecording) {
+                    Intent intent;
+                    switch (mActualCenter) {
+                        case 0: {
+                            intent = new Intent(Intent.ACTION_PICK);
+                            String pictureDirectoryPath = mImageFolder.getPath();
+                            Uri date = Uri.parse(pictureDirectoryPath);
+                            intent.setDataAndType(date,"image/jpg");
+                            startActivityForResult(intent, IMAGE_GALLERY_REQUEST);
+                        }
+                        break;
+                        case 1: {
+                            intent = new Intent(Intent.ACTION_PICK);
+                            String videoDirectoryPath = mVideoFolder.getPath();
+                            Uri date = Uri.parse(videoDirectoryPath);
+                            intent.setDataAndType(date,"video/mpeg");
+                            startActivityForResult(intent, 21);
+                        }
+                        break;
+                        case 2: {
+                            /*
+                            intent = new Intent(Intent.ACTION_PICK);
+                            File audioDirectory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC);
+                            String audioDirectoryPath = audioDirectory.getPath();
+                            Uri date = Uri.parse(audioDirectoryPath);
+                            intent.setDataAndType(date,"audio/3gp");
+                            startActivityForResult(intent, 22);*/
+                        }
+                        break;
+                    }
+                }
             }
         });
 
@@ -290,11 +351,11 @@ public class CamMuseActivity extends AppCompatActivity {
         super.onRequestPermissionsResult(requestCode,permissions,grantResults);
         if(requestCode == REQUEST_CAMERA_PERMISSION_RESULT){
             if(grantResults[0] != PackageManager.PERMISSION_GRANTED){
-                Toast.makeText(getApplicationContext(),"Camera services not allowed",Toast.LENGTH_SHORT).show();
+                Toast.makeText(getApplicationContext(),"Camera services must camera permission.",Toast.LENGTH_SHORT).show();
             }
             if(grantResults[1] != PackageManager.PERMISSION_GRANTED) {
                 Toast.makeText(getApplicationContext(),
-                        "Application will not have audio on record", Toast.LENGTH_SHORT).show();
+                        "Camera services must audio permission.", Toast.LENGTH_SHORT).show();
             }
         }
         if(requestCode == REQUEST_WRITE_EXTERNAL_STORAGE_PERMISSION_RESULT){
@@ -311,7 +372,7 @@ public class CamMuseActivity extends AppCompatActivity {
             }
             else {
                 Toast.makeText(this,
-                        "Application need external storage permission",Toast.LENGTH_SHORT).show();
+                        "Camera services must write permission.",Toast.LENGTH_SHORT).show();
             }
         }
     }
@@ -342,11 +403,32 @@ public class CamMuseActivity extends AppCompatActivity {
     private void  setButtonImage(ImageView imageView,int actualImage,boolean isCenter){
         if (isCenter){
             switch (actualImage){
-                case 0:imageView.setImageResource(R.drawable.btn_photo_center);
+                case 0:{
+                    imageView.setImageResource(R.drawable.btn_photo_center);
+                    mMicBackground.setVisibility(View.INVISIBLE);/*
+                    stopBackgroundThread();
+                    closeCamera();
+                    startBackgroundThread();
+                    setupCamera(mTextureView.getWidth(),mTextureView.getHeight());
+                    connectCamera();*/
+                }
                     break;
-                case 1:imageView.setImageResource(R.drawable.btn_video_center);
+                case 1:{
+                    imageView.setImageResource(R.drawable.btn_video_center);
+                    mMicBackground.setVisibility(View.INVISIBLE);/*
+                    stopBackgroundThread();
+                    closeCamera();
+                    startBackgroundThread();
+                    setupCamera(mTextureView.getWidth(),mTextureView.getHeight());
+                    connectCamera();*/
+                }
                     break;
-                case 2:imageView.setImageResource(R.drawable.btn_mic_center);
+                case 2:{
+                    imageView.setImageResource(R.drawable.btn_mic_center);
+                    //stopBackgroundThread();
+                    //closeCamera();
+                    mMicBackground.setVisibility(View.VISIBLE);
+                }
                     break;
             }
         }
@@ -361,17 +443,7 @@ public class CamMuseActivity extends AppCompatActivity {
             }
         }
     }
-    private void  setCenterButtonImageOnClick(){
-        switch (mActualCenter){
-            case 0: mCenterButton.setImageResource(R.drawable.btn_photo_selected);
-                break;
-            case 1: mCenterButton.setImageResource(R.drawable.btn_video_selected);
-                break;
-            case 2: mCenterButton.setImageResource(R.drawable.btn_mic_selected);
-                break;
-        }
-    }
-    private void  centerButtonImageOnClickMethod(){
+    private void centerButtonImageOnClickMethod(){
         switch (mActualCenter){
             case 0: createPhoto();
                 break;
@@ -392,14 +464,9 @@ public class CamMuseActivity extends AppCompatActivity {
         }
     }
     private void startRecord() {
-        Toast.makeText(this,
-                "Record",Toast.LENGTH_SHORT).show();
-
         try {
             if(mRecording) {
                 setupMediaRecorder();
-            } else if(mTimelapse) {
-                setupTimelapse();
             }
             SurfaceTexture surfaceTexture = mTextureView.getSurfaceTexture();
             surfaceTexture.setDefaultBufferSize(mPreviewSize.getWidth(), mPreviewSize.getHeight());
@@ -457,8 +524,6 @@ public class CamMuseActivity extends AppCompatActivity {
 
                 @Override
                 public void onConfigureFailed(@NonNull CameraCaptureSession session) {
-                    Toast.makeText(getApplicationContext(),
-                            "Unable to setup camera",Toast.LENGTH_SHORT).show();
                 }
             },null);
         } catch (CameraAccessException e) {
@@ -507,7 +572,7 @@ public class CamMuseActivity extends AppCompatActivity {
                 }
                 else {
                     if(shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)){
-                        Toast.makeText(this,"Video app required access to camera",Toast.LENGTH_SHORT).show();
+                        Toast.makeText(this,"Video app require access to camera",Toast.LENGTH_SHORT).show();
                     }
                     requestPermissions(new String[] {Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO},REQUEST_CAMERA_PERMISSION_RESULT);
                 }
@@ -578,20 +643,21 @@ public class CamMuseActivity extends AppCompatActivity {
         setupCamera(mTextureView.getWidth(),mTextureView.getHeight());
         connectCamera();
         }
-    private void createPhoto(){}
+    private void createPhoto(){
+        checkStoragePermission();
+        lockFocus();
+
+    }
     private void recordVideo (){
-        if(mRecording || mTimelapse) {
-            Toast.makeText(getApplicationContext(),"Video unclick.",Toast.LENGTH_SHORT).show();
+        if(mRecording) {
             mChronometer.stop();
             mChronometer.setVisibility(View.INVISIBLE);
             mRecording = false;
-            mTimelapse = false;
 
             mCenterButton.setImageResource(R.drawable.btn_video_center);
             mMediaRecorder.stop();
             mMediaRecorder.reset();
             mMediaRecorder.release();
-            Toast.makeText(getApplicationContext(),"Media Recorder down.",Toast.LENGTH_SHORT).show();
 
 
             Intent mediaStoreUpdateIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
@@ -605,29 +671,63 @@ public class CamMuseActivity extends AppCompatActivity {
             connectCamera();
         }
         else{
-            Toast.makeText(getApplicationContext(),"Video click.",Toast.LENGTH_SHORT).show();
             mRecording = true;
             mCenterButton.setImageResource(R.drawable.btn_video_selected);
             checkStoragePermission();
         }
     }
-    private void recordAudio () {}
+    private void recordAudio () {
+        if(!mAudioRecording){
+            try {
+                createAudioFileName();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            setUpAudioRecorder();
+            mAudioRecording = true;
+            mCenterButton.setImageResource(R.drawable.btn_mic_selected);
+            try {
+                mAudioRecorder.prepare();
+                mAudioRecorder.start();
+                mChronometer.setBase(SystemClock.elapsedRealtime());
+                mChronometer.setVisibility(View.VISIBLE);
+                mChronometer.start();
+            } catch (IllegalStateException ise) {
+                ise.getStackTrace();
+            } catch (IOException ioe) {
+                ioe.getStackTrace();
+            };
+            Toast.makeText(getApplicationContext(), "Recording started", Toast.LENGTH_LONG).show();
+        }
+        else{
+            mAudioRecorder.stop();
+            mAudioRecorder.release();
+            mAudioRecorder = null;
+            mChronometer.stop();
+            mChronometer.setVisibility(View.INVISIBLE);
+            mAudioRecording = false;
+            mCenterButton.setImageResource(R.drawable.btn_mic_center);
+
+            /*
+            Intent mediaStoreUpdateIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+            mediaStoreUpdateIntent.setData(Uri.fromFile(new File(mVideoFileName)));
+            sendBroadcast(mediaStoreUpdateIntent);
+            */
+            Toast.makeText(getApplicationContext(), "Record saved.", Toast.LENGTH_LONG).show();
+        }
+    }
     private void createVideoFolder() {
         File videoFile = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES);
         mVideoFolder = new File(videoFile,"CamMuse");
         if(!mVideoFolder.exists()){
             mVideoFolder.mkdirs();
         }
-        Toast.makeText(this,""+mVideoFolder.getName()+" "+mVideoFolder.getAbsolutePath(),Toast.LENGTH_SHORT).show();
     }
     private File createVideoFileName() throws IOException {
         String dateTime = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
         String apend = "Video_" + dateTime + "_";
         File videoFile = File.createTempFile(apend,".mp4",mVideoFolder);
         mVideoFileName = videoFile.getAbsolutePath();
-
-        Toast.makeText(this,""+videoFile.getName(),Toast.LENGTH_SHORT).show();
-
         return videoFile;
     }
     private void createImageFolder() {
@@ -644,6 +744,20 @@ public class CamMuseActivity extends AppCompatActivity {
         mImageFileName = imageFile.getAbsolutePath();
         return imageFile;
     }
+    private void createAudioFolder() {
+        File audioFile = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC);
+        mAudioFolder = new File(audioFile, "CamMuse");
+        if(!mAudioFolder.exists()) {
+            mAudioFolder.mkdirs();
+        }
+    }
+    private File createAudioFileName() throws IOException {
+        String datetime = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        String prepend = "AUDIO_" + datetime + "_";
+        File audioFile = File.createTempFile(prepend, ".3gp", mImageFolder);
+        mAudioFileName = audioFile.getAbsolutePath();
+        return audioFile;
+    }
     private  void checkStoragePermission(){
         if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if(ContextCompat.checkSelfPermission(this,Manifest.permission.WRITE_EXTERNAL_STORAGE)
@@ -653,7 +767,7 @@ public class CamMuseActivity extends AppCompatActivity {
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
-                if(mTimelapse || mRecording) {
+                if(mRecording) {
                     startRecord();
                     mMediaRecorder.start();
                     mChronometer.setBase(SystemClock.elapsedRealtime());
@@ -674,7 +788,7 @@ public class CamMuseActivity extends AppCompatActivity {
             } catch (IOException e) {
                 e.printStackTrace();
             }
-            if(mTimelapse || mRecording) {
+            if(mRecording) {
                 startRecord();
                 mMediaRecorder.start();
                 mChronometer.setBase(SystemClock.elapsedRealtime());
@@ -697,21 +811,10 @@ public class CamMuseActivity extends AppCompatActivity {
         mMediaRecorder.setOrientationHint(mRotation);
         mMediaRecorder.prepare();
     }
-    private void setupTimelapse() throws IOException {
-        mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
-        mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_TIME_LAPSE_HIGH));
-        mMediaRecorder.setOutputFile(mVideoFileName);
-        mMediaRecorder.setCaptureRate(2);
-        mMediaRecorder.setOrientationHint(mRotation);
-        mMediaRecorder.prepare();
-    }
     private void startStillCaptureRequest() {
         try {
-            if(mRecording) {
-                mCaptureRequestBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_VIDEO_SNAPSHOT);
-            } else {
-                mCaptureRequestBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
-            }
+            mCaptureRequestBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+
             mCaptureRequestBuilder.addTarget(mImageReader.getSurface());
             mCaptureRequestBuilder.set(CaptureRequest.JPEG_ORIENTATION, mRotation);
 
@@ -729,13 +832,26 @@ public class CamMuseActivity extends AppCompatActivity {
                         }
                     };
 
-            if(mRecording) {
-                mRecordCaptureSession.capture(mCaptureRequestBuilder.build(), stillCaptureCallback, null);
-            } else {
                 mPreviewCaptureSession.capture(mCaptureRequestBuilder.build(), stillCaptureCallback, null);
-            }
         } catch (CameraAccessException e) {
             e.printStackTrace();
         }
+        Toast.makeText(getApplicationContext(), "Photo is saved.", Toast.LENGTH_SHORT).show();
+    }
+    private void lockFocus() {
+        mCaptureState = STATE_WAIT_LOCK;
+        mCaptureRequestBuilder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START);
+        try {
+            mPreviewCaptureSession.capture(mCaptureRequestBuilder.build(), mPreviewCaptureCallback, mBackgroundHandler);
+        } catch (CameraAccessException e) {
+            e.printStackTrace();
+        }
+    }
+    private void setUpAudioRecorder(){
+        mAudioRecorder = new MediaRecorder();
+        mAudioRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+        mAudioRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP);
+        mAudioRecorder.setAudioEncoder(MediaRecorder.OutputFormat.AMR_NB);
+        mAudioRecorder.setOutputFile(mAudioFileName);
     }
 }

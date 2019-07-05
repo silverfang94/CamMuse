@@ -25,7 +25,6 @@ Main buttons:
 - actionButton (do photo,video, or audio, depend on application mode)
 - folderButton (open folder with saved images,video,audio)
 
-
 ### Development
 For development was using
 - Android Studio
